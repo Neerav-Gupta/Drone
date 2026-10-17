@@ -1,4 +1,4 @@
-# Autonomous Following Drone (Raspberry Pi 4B)
+# Autonomous Following Drone
 
 `tracker.py` detects and tracks a face from a USB camera, estimates how far away it is, and prints a movement command (`left`, `up`, `forward`, `hold`, ...) that a drone control loop can consume. It is tuned for low latency on a Raspberry Pi 4B.
 

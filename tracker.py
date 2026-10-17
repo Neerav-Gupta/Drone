@@ -1,21 +1,5 @@
-#!/usr/bin/env python3
-"""
-Fast + accurate face tracking with distance estimation, for Raspberry Pi 4B.
-
-Pipeline:
-1) YuNet (cv2.FaceDetectorYN) does periodic detection inside a small ROI
-   around the last known face -- fast (tiny input image) and accurate (a
-   real DNN that handles non-frontal faces and reports a confidence score,
-   unlike the old Haar cascade).
-2) MOSSE tracks frame-to-frame between detections for low end-to-end latency.
-3) A constant-velocity Kalman filter fuses detector + tracker measurements,
-   smooths the box, and exposes an estimated velocity -- exactly what a
-   pursuit controller needs to lead a moving subject instead of lagging it.
-4) A template-correlation check on the MOSSE patch catches silent tracker
-   drift (MOSSE reports ok=True even while sliding onto background texture).
-5) Distance to the subject is estimated from face width via the classic
-   similar-triangles relation, after a one-time focal-length calibration.
-"""
+# My usage:
+# python3 tracker.py --focal-length-px 401.5 --target-distance-cm 80 --distance-deadband-cm 10 --preview
 
 import argparse
 import os
@@ -59,7 +43,6 @@ class BBox:
 
 
 class ThreadedCamera:
-    """Keeps only the freshest frame to reduce latency."""
 
     @staticmethod
     def _try_open(source: int | str) -> Optional[cv2.VideoCapture]:
@@ -117,12 +100,6 @@ class ThreadedCamera:
 
 
 class KalmanBoxTracker:
-    """Constant-velocity Kalman filter over (center_x, center_y, width, height).
-
-    Fuses noisy detector/MOSSE measurements into a smooth box and keeps a
-    running velocity estimate, which both stabilizes the output and lets the
-    controller anticipate motion instead of always reacting a frame late.
-    """
 
     def __init__(self) -> None:
         self.kf = cv2.KalmanFilter(8, 4)
@@ -168,7 +145,6 @@ class KalmanBoxTracker:
 
     @property
     def velocity(self) -> Tuple[float, float]:
-        """Estimated (vx, vy) of the box center, in pixels/second."""
         if not self._initialized:
             return (0.0, 0.0)
         s = self.kf.statePost
@@ -234,7 +210,6 @@ class FaceTracker:
         raise RuntimeError("MOSSE tracker not available. Install opencv-contrib-python package.")
 
     def detect(self, frame: np.ndarray, roi: Optional[Tuple[int, int, int, int]] = None) -> Optional[Tuple[BBox, float]]:
-        """Run YuNet inside `roi` (or the full frame if None). Returns (bbox, score)."""
         if roi is not None:
             x1, y1, x2, y2 = roi
             crop = frame[y1:y2, x1:x2]
@@ -270,14 +245,6 @@ class FaceTracker:
 
     @staticmethod
     def _is_plausible_face(bbox: BBox, frame_shape: Tuple[int, int]) -> bool:
-        """Geometric sanity check on top of YuNet's confidence score.
-
-        A real face is mostly inside the frame and has a roughly square,
-        moderately-sized box. Without this, a borderline-confidence false
-        positive near an edge -- e.g. a box the size of the whole frame
-        anchored mostly off-screen -- can pass the score threshold, get
-        locked onto by MOSSE, and then sit there indefinitely because its
-        (static) patch keeps matching its own reference."""
         frame_h, frame_w = frame_shape
         if bbox.w <= 0 or bbox.h <= 0:
             return False
@@ -299,7 +266,6 @@ class FaceTracker:
         return True
 
     def reacquire(self, frame: np.ndarray) -> Optional[Tuple[BBox, float]]:
-        """Full-frame search used while no target is being tracked."""
         return self.detect(frame, roi=None)
 
     def search_roi(self, frame_shape: Tuple[int, int]) -> Optional[Tuple[int, int, int, int]]:
@@ -315,7 +281,6 @@ class FaceTracker:
         self._ref_patch = self._extract_patch(frame, bbox)
 
     def update_tracker(self, frame: np.ndarray) -> Optional[Tuple[BBox, float]]:
-        """Advance MOSSE one frame. Returns (bbox, similarity-to-reference-patch)."""
         if self.tracker is None:
             return None
         ok, rect = self.tracker.update(frame)
@@ -336,10 +301,6 @@ class FaceTracker:
         return cv2.resize(gray[y1:y2, x1:x2], (48, 48))
 
     def _similarity(self, frame: np.ndarray, bbox: BBox) -> float:
-        """Normalized cross-correlation between the live patch and the
-        reference grabbed at the last confirmed detection. MOSSE reports
-        ok=True even while drifting onto background texture; this catches
-        that drift instead of trusting a confidently-wrong box."""
         if self._ref_patch is None:
             return 1.0
         patch = self._extract_patch(frame, bbox)
@@ -350,9 +311,6 @@ class FaceTracker:
 
 
 def estimate_distance_cm(face_width_px: float, known_width_cm: float, focal_length_px: float) -> Optional[float]:
-    """Single-camera range estimate via similar triangles:
-    distance = (real_width * focal_length) / pixel_width.
-    Needs `focal_length_px` from a one-time calibration (--calibrate-distance-cm)."""
     if face_width_px <= 0 or focal_length_px <= 0:
         return None
     return (known_width_cm * focal_length_px) / face_width_px
@@ -370,7 +328,6 @@ def classify_motion(
     pixel_deadband: int,
     distance_deadband_cm: float,
 ) -> str:
-    """Translate frame offsets + range into the drone's pursuit command."""
     moves = []
     if dy < -pixel_deadband:
         moves.append("up")
